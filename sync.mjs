@@ -23,6 +23,9 @@ const TEST_PAGES = Number(process.env.TEST_PAGES) || 10;
 
 // Where the gzipped catalog is written locally and published.
 const OUTPUT_FILE = "workshop-catalog.json.gz";
+// A tiny (~200 byte) companion so the app can check for updates without pulling the 20 MB
+// catalog: it fetches this, compares LastSyncedAtUnix, and only downloads the gz if newer.
+const MANIFEST_FILE = "catalog-manifest.json";
 const RELEASE_TAG = "catalog";
 const ASSET_NAME = "workshop-catalog.json.gz";
 const DEFAULT_REPO = "PrawnCocktail/DZMGWSM"; // used when GITHUB_REPOSITORY is unset (local runs)
@@ -221,7 +224,20 @@ async function readPreviousCatalog() {
 async function writeCatalog(catalog) {
   const gz = gzipSync(Buffer.from(JSON.stringify(catalog, null, 2), "utf8"));
   await writeFile(OUTPUT_FILE, gz);
-  log(`Wrote ${OUTPUT_FILE} (${(gz.length / 1e6).toFixed(1)} MB gzipped, ${catalog.Mods.length} mods).`);
+
+  // Small manifest published alongside the catalog. LastSyncedAtUnix mirrors the derived
+  // WorkshopCatalog.LastSyncedAtUnix (the newer of the two times) - the value the app compares
+  // against its local copy to decide whether to re-download the full catalog.
+  const manifest = {
+    SyncedAtUnix: catalog.SyncedAtUnix,
+    PartialSyncedAtUnix: catalog.PartialSyncedAtUnix,
+    LastSyncedAtUnix: Math.max(catalog.SyncedAtUnix || 0, catalog.PartialSyncedAtUnix || 0),
+    ModCount: catalog.Mods.length,
+    CatalogBytesGz: gz.length,
+  };
+  await writeFile(MANIFEST_FILE, JSON.stringify(manifest, null, 2));
+
+  log(`Wrote ${OUTPUT_FILE} (${(gz.length / 1e6).toFixed(1)} MB gzipped, ${catalog.Mods.length} mods) and ${MANIFEST_FILE}.`);
 }
 
 // Rebuild the catalog from scratch. maxPages > 0 caps the crawl (test mode).

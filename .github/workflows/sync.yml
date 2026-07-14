@@ -29,11 +29,11 @@ jobs:
     permissions:
       contents: write # lets the job create/update the catalog release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Decide mode (full on the daily cron, delta otherwise)
         id: mode
@@ -68,15 +68,17 @@ jobs:
             || gh release create "$RELEASE_TAG" \
                  --title "DayZ Workshop catalog" \
                  --notes "Auto-updated by workshop-catalog-sync. Download the latest asset below."
-          gh release upload "$RELEASE_TAG" workshop-catalog.json.gz --clobber
-          echo "Published workshop-catalog.json.gz to release '$RELEASE_TAG'."
+          gh release upload "$RELEASE_TAG" workshop-catalog.json.gz catalog-manifest.json --clobber
+          echo "Published catalog + manifest to release '$RELEASE_TAG'."
 
-      # Test runs upload the partial catalog as a run artifact so you can download and inspect
-      # it, without ever overwriting the live 'catalog' release asset.
+      # Test runs upload the partial catalog and manifest as a run artifact so you can download
+      # and inspect them, without ever overwriting the live 'catalog' release assets.
       - name: Upload test catalog artifact
         if: steps.mode.outputs.mode == 'test' && hashFiles('workshop-catalog.json.gz') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: workshop-catalog-test
-          path: workshop-catalog.json.gz
+          path: |
+            workshop-catalog.json.gz
+            catalog-manifest.json
           retention-days: 7
