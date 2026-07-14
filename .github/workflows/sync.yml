@@ -8,14 +8,16 @@ on:
     # Delta sync every 15 minutes. GitHub's scheduler is best-effort and often runs a few
     # minutes late, which is fine for a mod catalog. 15 min is comfortably above the 5-min floor.
     - cron: "*/15 * * * *"
-  # Lets you run either sync by hand from the Actions tab (use this to test first).
+  # Lets you run a sync by hand from the Actions tab. "test" crawls only a few pages and
+  # uploads the result as a throwaway artifact instead of touching the real release - use it
+  # when changing the script so you are not hammering Steam or overwriting the live catalog.
   workflow_dispatch:
     inputs:
       mode:
         description: "Which sync to run"
         type: choice
         default: full
-        options: [full, delta]
+        options: [full, delta, test]
 
 # Never run two syncs at once: a full crawl takes a few minutes, so let a running one
 # finish rather than cancel it, and drop any extra run that queues up behind it.
@@ -57,8 +59,9 @@ jobs:
       # The catalog is ~175 MB uncompressed (over GitHub's 100 MB file push limit), so it is
       # gzipped by sync.mjs and published as a Release asset instead of committed. A delta run
       # with no changes writes no file, so the hashFiles guard skips the upload that time.
+      # Test runs are excluded here and handled by the artifact step below.
       - name: Publish catalog to the release
-        if: hashFiles('workshop-catalog.json.gz') != ''
+        if: steps.mode.outputs.mode != 'test' && hashFiles('workshop-catalog.json.gz') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: catalog
@@ -69,3 +72,13 @@ jobs:
                  --notes "Auto-updated by workshop-catalog-sync. Download the latest asset below."
           gh release upload "$RELEASE_TAG" workshop-catalog.json.gz --clobber
           echo "Published workshop-catalog.json.gz to release '$RELEASE_TAG'."
+
+      # Test runs upload the partial catalog as a run artifact so you can download and inspect
+      # it, without ever overwriting the live 'catalog' release asset.
+      - name: Upload test catalog artifact
+        if: steps.mode.outputs.mode == 'test' && hashFiles('workshop-catalog.json.gz') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: workshop-catalog-test
+          path: workshop-catalog.json.gz
+          retention-days: 7

@@ -15,6 +15,9 @@
 //   node sync.mjs full    rebuild the whole catalog (pages the entire DayZ workshop)
 //   node sync.mjs delta   top up only mods added/changed since the last sync
 //                         (falls back to a full sync if there is no catalog yet)
+//   node sync.mjs test    like full but stops after TEST_PAGES pages (default 10), for
+//                         checking changes end to end without hammering Steam. The workflow
+//                         routes its output to a throwaway artifact, never the real release.
 //
 // Needs STEAM_API_KEY in the environment. No dependencies (Node 18+ global fetch).
 
@@ -25,6 +28,9 @@ const APP_ID = "221100";                    // DayZ (AppPaths.DayZAppId)
 const PAGE_SIZE = 100;
 const PAGE_DELAY_MS = 250;                  // gentle on Steam, matches C# PageDelay
 const REQUEST_TIMEOUT_MS = 60000;
+
+// How many pages the "test" mode crawls before stopping (override with TEST_PAGES env).
+const TEST_PAGES = Number(process.env.TEST_PAGES) || 10;
 
 // Where the gzipped catalog is written locally and published.
 const OUTPUT_FILE = "workshop-catalog.json.gz";
@@ -189,14 +195,17 @@ function parsePage(json) {
 // Page through QueryFiles from the start cursor, handing each page to
 // onPage(mods, total, page) -> stop. Stops when the handler says so, a page is empty, or
 // the cursor stops advancing (Steam echoes the same next_cursor once it runs out).
-async function crawl(queryType, onPage) {
+async function crawl(queryType, onPage, maxPages = 0) {
   let cursor = "*";
   let page = 0;
   for (;;) {
     const { mods, nextCursor, total } = parsePage(await fetchPage(cursor, queryType));
     page++;
     const stop = onPage(mods, total, page);
-    if (stop || mods.length === 0 || !nextCursor || nextCursor === cursor) break;
+    // Also stop once a page cap is set and reached (test mode), so we do not crawl the lot.
+    if (stop || mods.length === 0 || !nextCursor || nextCursor === cursor || (maxPages && page >= maxPages)) {
+      break;
+    }
     cursor = nextCursor;
     await sleep(PAGE_DELAY_MS);
   }
@@ -228,9 +237,12 @@ async function writeCatalog(catalog) {
   log(`Wrote ${OUTPUT_FILE} (${(gz.length / 1e6).toFixed(1)} MB gzipped, ${catalog.Mods.length} mods).`);
 }
 
-async function runFull() {
+// Rebuild the catalog from scratch. maxPages > 0 caps the crawl (test mode).
+async function runFull(maxPages = 0) {
   const startedUnix = nowUnix();
-  log("Full sync: crawling the whole DayZ workshop (this can take a few minutes)...");
+  log(maxPages
+    ? `Test sync: crawling the first ${maxPages} pages (~${maxPages * PAGE_SIZE} mods) only...`
+    : "Full sync: crawling the whole DayZ workshop (this can take a few minutes)...");
 
   const mods = [];
   const seen = new Set();
@@ -247,10 +259,10 @@ async function runFull() {
       ? `  fetched ${mods.length} of ~${total} mods (page ${page})`
       : `  fetched ${mods.length} mods (page ${page})`);
     return added === 0; // a page that brings nothing new means we are done
-  });
+  }, maxPages);
 
   await writeCatalog({ SyncedAtUnix: startedUnix, PartialSyncedAtUnix: 0, Mods: mods });
-  log(`Full sync finished: ${mods.length} mods.`);
+  log(`${maxPages ? "Test" : "Full"} sync finished: ${mods.length} mods.`);
 }
 
 async function runDelta() {
@@ -318,7 +330,12 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-(mode === "full" ? runFull() : runDelta()).catch((e) => {
+let task;
+if (mode === "full") task = runFull();
+else if (mode === "test") task = runFull(TEST_PAGES);
+else task = runDelta();
+
+task.catch((e) => {
   console.error(e);
   process.exit(1);
 });
