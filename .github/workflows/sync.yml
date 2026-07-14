@@ -2,15 +2,13 @@ name: workshop-catalog-sync
 
 on:
   schedule:
-    # Full sync once a day. 04:07 UTC dodges the every-15-min ticks below so the two
-    # do not collide at the top of the hour. Change the time here (cron is UTC).
+    # Full sync once a day. 
     - cron: "7 4 * * *"
     # Delta sync every 15 minutes. GitHub's scheduler is best-effort and often runs a few
-    # minutes late, which is fine for a mod catalog. 15 min is comfortably above the 5-min floor.
+    # minutes late, which is fine for a mod catalog.
     - cron: "*/15 * * * *"
   # Lets you run a sync by hand from the Actions tab. "test" crawls only a few pages and
-  # uploads the result as a throwaway artifact instead of touching the real release - use it
-  # when changing the script so you are not hammering Steam or overwriting the live catalog.
+  # uploads the result as a throwaway
   workflow_dispatch:
     inputs:
       mode:
@@ -56,7 +54,7 @@ jobs:
           STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
         run: node sync.mjs ${{ steps.mode.outputs.mode }}
 
-      # The catalog is ~175 MB uncompressed (over GitHub's 100 MB file push limit), so it is
+      # The catalog is over GitHub's 100 MB file push limit, so it is
       # gzipped by sync.mjs and published as a Release asset instead of committed. A delta run
       # with no changes writes no file, so the hashFiles guard skips the upload that time.
       # Test runs are excluded here and handled by the artifact step below.

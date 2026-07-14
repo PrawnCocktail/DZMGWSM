@@ -1,16 +1,5 @@
 // DZMGWSM - DayZ Workshop catalog sync for GitHub Actions.
 //
-// Ported from DZMG's WorkshopCatalogService (C#). Crawls Steam's
-// IPublishedFileService/QueryFiles and produces workshop-catalog.json in the exact shape
-// DZMG reads back: System.Text.Json defaults (case-sensitive PascalCase, indented), with
-// unmapped Steam fields inlined per mod like the C# [JsonExtensionData] Extra.
-//
-// The catalog is ~175 MB uncompressed, over GitHub's 100 MB per-file push limit, so it is
-// NOT committed to the repo. Instead it is gzipped (~15 MB) and published as an asset on a
-// fixed GitHub Release (tag "catalog"). That keeps full fidelity, dodges the size limit, and
-// avoids bloating the repo with a fresh 175 MB file every run. The delta sync reads the
-// previous catalog back from that same asset.
-//
 // Usage:
 //   node sync.mjs full    rebuild the whole catalog (pages the entire DayZ workshop)
 //   node sync.mjs delta   top up only mods added/changed since the last sync
@@ -24,12 +13,12 @@
 import { writeFile } from "node:fs/promises";
 import { gzipSync, gunzipSync } from "node:zlib";
 
-const APP_ID = "221100";                    // DayZ (AppPaths.DayZAppId)
+const APP_ID = "221100";                   
 const PAGE_SIZE = 100;
-const PAGE_DELAY_MS = 250;                  // gentle on Steam, matches C# PageDelay
+const PAGE_DELAY_MS = 500;
 const REQUEST_TIMEOUT_MS = 60000;
 
-// How many pages the "test" mode crawls before stopping (override with TEST_PAGES env).
+// How many pages the "test" mode crawls before stopping.
 const TEST_PAGES = Number(process.env.TEST_PAGES) || 10;
 
 // Where the gzipped catalog is written locally and published.
@@ -42,9 +31,7 @@ const DEFAULT_REPO = "PrawnCocktail/DZMGWSM"; // used when GITHUB_REPOSITORY is 
 const RANKED_BY_PUBLICATION_DATE = 1;       // full crawl: stable enumeration of every item
 const RANKED_BY_LAST_UPDATED = 21;          // delta crawl: newest-updated first
 
-// Steam fields WorkshopCatalogService maps to typed properties. Everything else Steam
-// returns is kept verbatim and inlined per mod, mirroring the C# [JsonExtensionData] Extra
-// so no metadata is lost and new Steam fields survive without a code change.
+// Steam fields WorkshopCatalogService maps to typed properties.
 const MAPPED_FIELDS = new Set([
   "publishedfileid", "title", "creator", "preview_url", "time_updated", "time_created",
   "subscriptions", "lifetime_subscriptions", "favorited", "lifetime_favorited", "views",
