@@ -1,9 +1,15 @@
 // DZMGWSM - DayZ Workshop catalog sync for GitHub Actions.
 //
 // Ported from DZMG's WorkshopCatalogService (C#). Crawls Steam's
-// IPublishedFileService/QueryFiles and writes data/workshop-catalog.json in the exact
-// shape DZMG reads back: System.Text.Json defaults (case-sensitive PascalCase, indented),
-// with unmapped Steam fields inlined per mod like the C# [JsonExtensionData] Extra.
+// IPublishedFileService/QueryFiles and produces workshop-catalog.json in the exact shape
+// DZMG reads back: System.Text.Json defaults (case-sensitive PascalCase, indented), with
+// unmapped Steam fields inlined per mod like the C# [JsonExtensionData] Extra.
+//
+// The catalog is ~175 MB uncompressed, over GitHub's 100 MB per-file push limit, so it is
+// NOT committed to the repo. Instead it is gzipped (~15 MB) and published as an asset on a
+// fixed GitHub Release (tag "catalog"). That keeps full fidelity, dodges the size limit, and
+// avoids bloating the repo with a fresh 175 MB file every run. The delta sync reads the
+// previous catalog back from that same asset.
 //
 // Usage:
 //   node sync.mjs full    rebuild the whole catalog (pages the entire DayZ workshop)
@@ -12,14 +18,19 @@
 //
 // Needs STEAM_API_KEY in the environment. No dependencies (Node 18+ global fetch).
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { gzipSync, gunzipSync } from "node:zlib";
 
 const APP_ID = "221100";                    // DayZ (AppPaths.DayZAppId)
-const CATALOG_FILE = "data/workshop-catalog.json";
 const PAGE_SIZE = 100;
-const PAGE_DELAY_MS = 500;                  // gentle on Steam, matches C# PageDelay
+const PAGE_DELAY_MS = 250;                  // gentle on Steam, matches C# PageDelay
 const REQUEST_TIMEOUT_MS = 60000;
+
+// Where the gzipped catalog is written locally and published.
+const OUTPUT_FILE = "workshop-catalog.json.gz";
+const RELEASE_TAG = "catalog";
+const ASSET_NAME = "workshop-catalog.json.gz";
+const DEFAULT_REPO = "PrawnCocktail/DZMGWSM"; // used when GITHUB_REPOSITORY is unset (local runs)
 
 // query_type values (Steam EPublishedFileQueryType)
 const RANKED_BY_PUBLICATION_DATE = 1;       // full crawl: stable enumeration of every item
@@ -191,17 +202,30 @@ async function crawl(queryType, onPage) {
   }
 }
 
-async function readCatalog() {
+// Fetch and gunzip the previously published catalog from the Release asset. Returns null if
+// there is no release/asset yet (first run) or it cannot be read, so the caller falls back
+// to a full sync.
+async function readPreviousCatalog() {
+  const repo = process.env.GITHUB_REPOSITORY || DEFAULT_REPO;
+  const url = `https://github.com/${repo}/releases/download/${RELEASE_TAG}/${ASSET_NAME}`;
   try {
-    return JSON.parse(await readFile(CATALOG_FILE, "utf8"));
-  } catch {
+    const res = await fetch(url); // follows redirects to the asset storage
+    if (!res.ok) {
+      log(`No previous catalog asset (HTTP ${res.status}).`);
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    return JSON.parse(gunzipSync(buf).toString("utf8"));
+  } catch (e) {
+    log(`Could not read previous catalog: ${e.message}`);
     return null;
   }
 }
 
 async function writeCatalog(catalog) {
-  await mkdir(dirname(CATALOG_FILE), { recursive: true });
-  await writeFile(CATALOG_FILE, JSON.stringify(catalog, null, 2));
+  const gz = gzipSync(Buffer.from(JSON.stringify(catalog, null, 2), "utf8"));
+  await writeFile(OUTPUT_FILE, gz);
+  log(`Wrote ${OUTPUT_FILE} (${(gz.length / 1e6).toFixed(1)} MB gzipped, ${catalog.Mods.length} mods).`);
 }
 
 async function runFull() {
@@ -226,12 +250,12 @@ async function runFull() {
   });
 
   await writeCatalog({ SyncedAtUnix: startedUnix, PartialSyncedAtUnix: 0, Mods: mods });
-  log(`Full sync finished: ${mods.length} mods saved.`);
+  log(`Full sync finished: ${mods.length} mods.`);
 }
 
 async function runDelta() {
   const startedUnix = nowUnix();
-  const existing = await readCatalog();
+  const existing = await readPreviousCatalog();
   const watermark = existing
     ? Math.max(existing.SyncedAtUnix || 0, existing.PartialSyncedAtUnix || 0)
     : 0;
@@ -273,11 +297,11 @@ async function runDelta() {
     return changed === 0; // a whole page older than the watermark means we are done
   });
 
-  // Only rewrite the catalog when something actually changed, so a quiet 15-minute tick
-  // does not produce a commit that only bumps a timestamp. The watermark then simply stays
-  // put until the next real change, which keeps each scan tiny.
+  // Only write (and therefore publish) when something actually changed, so a quiet 15-minute
+  // tick does not republish an identical asset. The watermark then simply stays put until the
+  // next real change, which keeps each scan tiny.
   if (added === 0 && updated === 0) {
-    log("Delta sync finished: no changes.");
+    log("Delta sync finished: no changes (nothing to publish).");
     return;
   }
 
