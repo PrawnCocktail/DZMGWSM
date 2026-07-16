@@ -62,13 +62,18 @@ jobs:
         if: steps.mode.outputs.mode != 'test' && hashFiles('workshop-catalog.json.gz') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }} # resolve the repo explicitly, never via git remote
           RELEASE_TAG: catalog
         run: |
-          # Create the release on the first run only. The existence check can fail on a transient
-          # API blip, which would then make `create` run against the existing tag and 422, so the
-          # whole chain is tolerated: the upload below is what actually publishes, and it fails
-          # loudly if something is genuinely wrong.
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
+          # Diagnostics: show every release this token can see, including drafts. Silencing this
+          # check previously hid the real error and made a failure impossible to diagnose.
+          echo "--- releases visible to this token ---"
+          gh release list --limit 10 || true
+          echo "--------------------------------------"
+
+          # Create the release only if it is genuinely missing. Tolerated either way: the upload
+          # below is what actually publishes, and it fails loudly if something is really wrong.
+          gh release view "$RELEASE_TAG" \
             || gh release create "$RELEASE_TAG" \
                  --title "DayZ Workshop catalog" \
                  --notes "Auto-updated by workshop-catalog-sync. Download the latest asset below." \
