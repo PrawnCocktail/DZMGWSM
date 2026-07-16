@@ -64,12 +64,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: catalog
         run: |
+          # Create the release on the first run only. The existence check can fail on a transient
+          # API blip, which would then make `create` run against the existing tag and 422, so the
+          # whole chain is tolerated: the upload below is what actually publishes, and it fails
+          # loudly if something is genuinely wrong.
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
             || gh release create "$RELEASE_TAG" \
                  --title "DayZ Workshop catalog" \
-                 --notes "Auto-updated by workshop-catalog-sync. Download the latest asset below."
-          gh release upload "$RELEASE_TAG" workshop-catalog.json.gz catalog-manifest.json --clobber
-          echo "Published catalog + manifest to release '$RELEASE_TAG'."
+                 --notes "Auto-updated by workshop-catalog-sync. Download the latest asset below." \
+            || true
+
+          # Retry so a transient API error does not throw away an otherwise good sync.
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" workshop-catalog.json.gz catalog-manifest.json --clobber; then
+              echo "Published catalog + manifest to release '$RELEASE_TAG'."
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "Upload failed after 3 attempts."
+          exit 1
 
       # Test runs upload the partial catalog and manifest as a run artifact so you can download
       # and inspect them, without ever overwriting the live 'catalog' release assets.
